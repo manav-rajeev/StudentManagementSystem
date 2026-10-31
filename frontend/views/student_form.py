@@ -10,18 +10,27 @@ from datetime import date, datetime
 from typing import Any
 
 from backend import lookup_service, student_service
+from frontend.widgets.design_system import ScrollableFrame
 
 
 class StudentFormView(ttk.Frame):
-    def __init__(self, master: tk.Misc, on_navigate: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        on_navigate: Callable[[str], None],
+        on_notify: Callable[[str, str], None] | None = None,
+    ) -> None:
         super().__init__(master, style="App.TFrame")
         self.on_navigate = on_navigate
+        self.on_notify = on_notify
         self.student_id: int | None = None
         self.pending_student_id: int | None = None
         self.departments: list[dict[str, Any]] = []
         self.programmes: list[dict[str, Any]] = []
         self.department_ids: dict[str, int] = {}
         self.programme_ids: dict[str, int] = {}
+        self.palette: dict[str, str] = {}
+        self.status_is_error = False
         self.variables = {
             key: tk.StringVar()
             for key in (
@@ -31,19 +40,21 @@ class StudentFormView(ttk.Frame):
             )
         }
 
-        ttk.Label(self, text="Student registration", style="PageTitle.TLabel").pack(anchor="w")
+        self.page_title = ttk.Label(self, text="Add student", style="PageTitle.TLabel")
+        self.page_title.pack(anchor="w")
         ttk.Label(
             self,
             text="Enter the student's details and select their department and programme.",
             style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(5, 18))
 
-        panel = ttk.Frame(self, style="Card.TFrame", padding=(22, 16))
+        self.form_viewport = ScrollableFrame(self)
+        self.form_viewport.pack(fill="both", expand=True)
+        panel = ttk.Frame(self.form_viewport.content, style="Card.TFrame", padding=(22, 16))
         panel.pack(fill="both", expand=True)
         panel.columnconfigure(0, weight=1)
         panel.columnconfigure(1, weight=1)
-        self._entry(panel, "Student number *", "student_number", 0, 0)
-        self._combo(panel, "Department", "department", 0, 1, self._department_changed)
+        self._section(panel, "Personal details", 0)
         self._entry(panel, "First name *", "first_name", 1, 0)
         self._entry(panel, "Last name *", "last_name", 1, 1)
         self._entry(panel, "Date of birth (DD-MM-YYYY)", "date_of_birth", 2, 0)
@@ -51,34 +62,70 @@ class StudentFormView(ttk.Frame):
             panel, "Gender", "gender", 2, 1,
             values=("", "Female", "Male", "Non-binary", "Prefer not to say"),
         )
-        self._entry(panel, "Email", "email", 3, 0)
-        self._entry(panel, "Phone", "phone", 3, 1)
-        self._label(panel, "Address", 4, 0)
+        self._section(panel, "Contact details", 6)
+        self._entry(panel, "Email", "email", 4, 0)
+        self._entry(panel, "Phone", "phone", 4, 1)
+        self._label(panel, "Address", 5, 0)
         self.address_text = tk.Text(
             panel, height=2, wrap="word", font=("Segoe UI", 10),
-            relief="solid", bd=1, highlightthickness=0,
+            relief="solid", bd=1, highlightthickness=1,
         )
-        self.address_text.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(4, 5))
-        self._combo(panel, "Programme *", "programme", 5, 0)
-        self._entry(panel, "Admission date * (DD-MM-YYYY)", "admission_date", 5, 1)
+        self.address_text.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(4, 5))
+        self._section(panel, "Academic details", 12)
+        self._entry(panel, "Student number *", "student_number", 7, 0)
+        self._combo(panel, "Department *", "department", 7, 1, self._department_changed)
+        self._combo(panel, "Programme *", "programme", 8, 0)
+        self._entry(panel, "Admission date * (DD-MM-YYYY)", "admission_date", 8, 1)
         self._combo(
-            panel, "Student status", "status", 6, 0,
+            panel, "Student status", "status", 9, 0,
             values=("Active", "Inactive", "Graduated"),
         )
 
         self.status_message = ttk.Label(
-            panel, text="", foreground="#a33a3a", background="#ffffff", wraplength=850
+            panel, text="", style="FormStatus.TLabel"
         )
-        self.status_message.grid(row=14, column=0, columnspan=2, sticky="w", pady=(5, 0))
-        actions = ttk.Frame(panel, style="Card.TFrame")
-        actions.grid(row=15, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        ttk.Button(actions, text="Save student", style="Primary.TButton",
-                   command=self.save).pack(side="left")
+        self.status_message.grid(row=20, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        actions = ttk.Frame(panel, style="CardInner.TFrame")
+        actions.grid(row=21, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.save_button = ttk.Button(actions, text="Add student", style="Primary.TButton", command=self.save)
+        self.save_button.pack(side="left")
         ttk.Button(actions, text="Cancel", style="Secondary.TButton",
                    command=lambda: self.on_navigate("students")).pack(side="left", padx=(9, 0))
 
+    def apply_theme(self, palette: dict[str, str]) -> None:
+        """Apply the app's active palette to native text and status widgets."""
+        self.palette = palette
+        if hasattr(self, "form_viewport"):
+            self.form_viewport.apply_theme(palette)
+        if hasattr(self, "address_text"):
+            self.address_text.configure(
+                bg=palette["surface"], fg=palette["body_text"],
+                insertbackground=palette["text"], selectbackground=palette["sidebar_active"],
+                selectforeground=palette["sidebar_text"],
+                highlightbackground=palette["border"], highlightcolor=palette["primary"],
+            )
+        if hasattr(self, "status_message"):
+            self.status_message.configure(
+                foreground=palette["danger"] if self.status_is_error else palette["muted"]
+            )
+
+    def _section(self, parent: ttk.Frame, title: str, row: int) -> None:
+        ttk.Label(parent, text=title, style="SectionTitle.TLabel").grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(12, 3)
+        )
+        ttk.Separator(parent).grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(0, 3))
+
+    def _set_status(self, text: str, *, error: bool = False) -> None:
+        self.status_is_error = error
+        color = self.palette.get("danger", "#B83F4B") if error else self.palette.get("muted", "#777187")
+        self.status_message.configure(text=text, foreground=color)
+
+    def _notify(self, message: str, kind: str) -> None:
+        if self.on_notify is not None:
+            self.on_notify(message, kind)
+
     def _label(self, parent: ttk.Frame, text: str, row: int, column: int) -> None:
-        ttk.Label(parent, text=text, background="#ffffff").grid(
+        ttk.Label(parent, text=text, style="CardLabel.TLabel").grid(
             row=row * 2, column=column, sticky="w",
             padx=(0, 10) if column == 0 else (10, 0), pady=(6, 0),
         )
@@ -132,10 +179,10 @@ class StudentFormView(ttk.Frame):
             self._populate(record)
             self.pending_student_id = None
         except ValueError as error:
-            self.status_message.configure(text=str(error))
+            self._set_status(str(error), error=True)
         except Exception:
-            self.status_message.configure(
-                text="Could not load student form data. Check the database settings and server."
+            self._set_status(
+                "Could not load student form data. Check the database settings and server.", error=True
             )
 
     @staticmethod
@@ -172,11 +219,13 @@ class StudentFormView(ttk.Frame):
         except Exception:
             self.programme_ids.clear()
             self.programme_combo.configure(values=())
-            self.status_message.configure(text="Could not load programmes for this department.")
+            self._set_status("Could not load programmes for this department.", error=True)
 
     def _populate(self, record: dict[str, Any]) -> None:
         self.student_id = int(record["student_id"])
-        self.status_message.configure(text=f"Editing student ID {self.student_id}.")
+        self.page_title.configure(text="Edit student")
+        self.save_button.configure(text="Save changes")
+        self._set_status(f"Editing student ID {self.student_id}.")
         for key in ("student_number", "first_name", "last_name", "gender", "email", "phone", "status"):
             self.variables[key].set(record.get(key) or "")
         self.variables["date_of_birth"].set(self._date_text(record.get("date_of_birth")))
@@ -221,13 +270,15 @@ class StudentFormView(ttk.Frame):
 
     def _reset(self) -> None:
         self.student_id = None
+        self.page_title.configure(text="Add student")
+        self.save_button.configure(text="Add student")
         for variable in self.variables.values():
             variable.set("")
         self.variables["status"].set("Active")
         self.address_text.delete("1.0", "end")
         self.programme_ids.clear()
         self.programme_combo.configure(values=())
-        self.status_message.configure(text="Required fields are marked with *.")
+        self._set_status("Required fields are marked with *.")
 
     def _form_data(self) -> dict[str, Any]:
         program_id = self.programme_ids.get(self.variables["programme"].get())
@@ -260,20 +311,25 @@ class StudentFormView(ttk.Frame):
                     data, self.student_id, confirm_program_change=True
                 )
             if self.student_id is not None and result is False:
-                messagebox.showinfo("Student not found", "The student record no longer exists.", parent=self)
+                message = "The student record no longer exists."
+                self._set_status(message, error=True)
+                self._notify(message, "warning")
                 return
         except ValueError as error:
-            self.status_message.configure(text=str(error))
+            self._set_status(str(error), error=True)
+            self._notify(str(error), "error")
             return
         except Exception:
-            messagebox.showerror(
-                "Could not save student",
-                "The student record could not be saved. Check for a duplicate student number or email and verify the database connection.",
-                parent=self,
+            message = (
+                "The student record could not be saved. Check for a duplicate student number or email "
+                "and verify the database connection."
             )
+            self._set_status(message, error=True)
+            self._notify(message, "error")
             return
 
-        messagebox.showinfo("Student saved", "Student information was saved successfully.", parent=self)
+        operation = "updated" if self.student_id is not None else "registered"
+        self._notify(f"Student {operation} successfully.", "success")
         self.pending_student_id = None
         self.on_navigate("students")
 

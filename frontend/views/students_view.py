@@ -1,14 +1,18 @@
-"""Student records table with search, editing, deletion, and enrolment access."""
+"""Student directory with local filtering and existing service operations."""
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
 from backend import export_service, student_service
+
+
+STATUSES = ("Active", "Inactive", "Graduated")
+ALL_STATUSES = "All statuses"
 
 
 class StudentsView(ttk.Frame):
@@ -18,21 +22,29 @@ class StudentsView(ttk.Frame):
         on_navigate: Callable[[str], None],
         on_edit: Callable[[int], None],
         on_manage_enrollments: Callable[[int], None],
+        on_notify: Callable[[str, str], None] | None = None,
     ) -> None:
         super().__init__(master, style="App.TFrame")
         self.on_navigate = on_navigate
         self.on_edit = on_edit
         self.on_manage_enrollments = on_manage_enrollments
+        self.on_notify = on_notify
         self.records: list[dict[str, Any]] = []
+        self.records_by_id: dict[int, dict[str, Any]] = {}
+        self.filtered_records: list[dict[str, Any]] = []
+        self.detail_windows: list[tk.Toplevel] = []
+        self.confirmation_windows: list[tk.Toplevel] = []
+        self.palette: dict[str, str] = {}
+        self.load_failed = False
 
         heading = ttk.Frame(self, style="App.TFrame")
-        heading.pack(fill="x", pady=(0, 22))
+        heading.pack(fill="x", pady=(0, 20))
         title_box = ttk.Frame(heading, style="App.TFrame")
-        title_box.pack(side="left")
-        ttk.Label(title_box, text="Student records", style="PageTitle.TLabel").pack(anchor="w")
+        title_box.pack(side="left", fill="x", expand=True)
+        ttk.Label(title_box, text="Students", style="PageTitle.TLabel").pack(anchor="w")
         ttk.Label(
             title_box,
-            text="Search, review, and manage registered students",
+            text="Search, review, and manage student records.",
             style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(5, 0))
         heading_actions = ttk.Frame(heading, style="App.TFrame")
@@ -45,141 +57,360 @@ class StudentsView(ttk.Frame):
         ).pack(side="left", padx=(0, 8))
         ttk.Button(
             heading_actions,
-            text="+ Register student",
+            text="＋  Add Student",
             style="Primary.TButton",
-            command=lambda: on_navigate("registration"),
+            command=lambda: self.on_navigate("registration"),
         ).pack(side="left")
+
+        self.summary_labels: dict[str, ttk.Label] = {}
+        summary_row = ttk.Frame(self, style="App.TFrame")
+        summary_row.pack(fill="x", pady=(0, 16))
+        summaries = (
+            ("total", "Total students", "●", "MetricIcon.TLabel"),
+            ("active", "Active", "●", "StudentActiveIcon.TLabel"),
+            ("inactive", "Inactive", "●", "StudentInactiveIcon.TLabel"),
+            ("graduated", "Graduated", "●", "StudentGraduatedIcon.TLabel"),
+        )
+        for index, (key, title, icon, icon_style) in enumerate(summaries):
+            card = ttk.Frame(summary_row, style="Card.TFrame", padding=(17, 14))
+            card.pack(side="left", fill="both", expand=True, padx=(0, 10 if index < 3 else 0))
+            top = ttk.Frame(card, style="CardInner.TFrame")
+            top.pack(fill="x")
+            ttk.Label(top, text=title, style="CardLabel.TLabel").pack(side="left")
+            ttk.Label(top, text=icon, style=icon_style).pack(side="right")
+            value = ttk.Label(card, text="—", style="CardValue.TLabel")
+            value.pack(anchor="w", pady=(8, 0))
+            self.summary_labels[key] = value
 
         toolbar = ttk.Frame(self, style="Card.TFrame", padding=12)
         toolbar.pack(fill="x", pady=(0, 14))
+        filter_row = ttk.Frame(toolbar, style="CardInner.TFrame")
+        filter_row.pack(fill="x")
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=36)
-        self.search_entry.pack(side="left", padx=(0, 8))
-        self.search_entry.bind("<Return>", lambda _event: self.search())
-        ttk.Button(toolbar, text="Search", style="Primary.TButton", command=self.search).pack(
-            side="left", padx=(0, 6)
+        self.search_entry = ttk.Entry(filter_row, textvariable=self.search_var, width=35)
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.search_entry.insert(0, "Search name, student number, or email")
+        self.search_entry.configure(foreground="#777187")
+        self.search_entry.bind("<FocusIn>", self._clear_search_hint)
+        self.search_entry.bind("<FocusOut>", self._restore_search_hint)
+        self.search_var.trace_add("write", lambda *_args: self.apply_filters())
+
+        ttk.Label(filter_row, text="Status", style="CardLabel.TLabel").pack(side="left", padx=(4, 7))
+        self.status_filter_var = tk.StringVar(value=ALL_STATUSES)
+        self.status_filter = ttk.Combobox(
+            toolbar, textvariable=self.status_filter_var, state="readonly",
+            values=(ALL_STATUSES, *STATUSES), width=15,
         )
-        ttk.Button(toolbar, text="Clear", style="Secondary.TButton", command=self.clear_search).pack(
-            side="left"
-        )
-        ttk.Button(toolbar, text="Refresh", style="Secondary.TButton", command=self.refresh).pack(
-            side="left", padx=(6, 0)
-        )
-        ttk.Button(toolbar, text="Delete", style="Secondary.TButton",
+        self.status_filter.pack(side="left")
+        self.status_filter.bind("<<ComboboxSelected>>", lambda _event: self.apply_filters())
+        ttk.Button(filter_row, text="Reset filters", style="Secondary.TButton",
+                   command=self.clear_search).pack(side="left", padx=(8, 0))
+
+        record_actions = ttk.Frame(toolbar, style="CardInner.TFrame")
+        record_actions.pack(fill="x", pady=(10, 0))
+        ttk.Button(record_actions, text="Delete", style="Secondary.TButton",
                    command=self.delete_selected).pack(side="right")
-        ttk.Button(toolbar, text="Edit", style="Secondary.TButton",
+        ttk.Button(record_actions, text="Edit", style="Secondary.TButton",
                    command=self.edit_selected).pack(side="right", padx=(0, 8))
-        ttk.Button(toolbar, text="Manage Courses", style="Secondary.TButton",
+        ttk.Button(record_actions, text="View", style="Secondary.TButton",
+                   command=self.view_selected).pack(side="right", padx=(0, 8))
+        ttk.Button(record_actions, text="Manage Courses", style="Secondary.TButton",
                    command=self.manage_selected).pack(side="right", padx=(0, 8))
 
-        table_panel = ttk.Frame(self, style="Card.TFrame", padding=10)
-        table_panel.pack(fill="both", expand=True)
+        self.results_area = ttk.Frame(self, style="App.TFrame")
+        self.results_area.pack(fill="both", expand=True)
+        self.table_panel = ttk.Frame(self.results_area, style="Card.TFrame", padding=10)
+        self.table_panel.pack(fill="both", expand=True)
         columns = (
-            "student_id", "student_number", "name", "program", "department",
+            "student_number", "name", "email", "department", "program",
             "admission_date", "status",
         )
-        self.table = ttk.Treeview(table_panel, columns=columns, show="headings", selectmode="browse")
+        self.table = ttk.Treeview(self.table_panel, columns=columns, show="headings", selectmode="browse")
         labels = {
-            "student_id": ("ID", 55),
-            "student_number": ("Student number", 135),
-            "name": ("Student name", 180),
-            "program": ("Programme", 300),
-            "department": ("Department", 175),
+            "student_number": ("Student number", 130),
+            "name": ("Student name", 175),
+            "email": ("Email", 200),
+            "department": ("Department", 170),
+            "program": ("Programme", 225),
             "admission_date": ("Admission date", 125),
-            "status": ("Status", 100),
+            "status": ("Status", 110),
         }
         for column, (label, width) in labels.items():
             self.table.heading(column, text=label)
-            minwidth = 220 if column == "program" else 55
-            self.table.column(column, width=width, minwidth=minwidth, anchor="w")
-        y_scroll = ttk.Scrollbar(table_panel, orient="vertical", command=self.table.yview)
-        x_scroll = ttk.Scrollbar(table_panel, orient="horizontal", command=self.table.xview)
+            self.table.column(column, width=width, minwidth=85, anchor="w", stretch=True)
+        y_scroll = ttk.Scrollbar(self.table_panel, orient="vertical", command=self.table.yview)
+        x_scroll = ttk.Scrollbar(self.table_panel, orient="horizontal", command=self.table.xview)
         self.table.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
         self.table.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
-        table_panel.rowconfigure(0, weight=1)
-        table_panel.columnconfigure(0, weight=1)
+        self.table_panel.rowconfigure(0, weight=1)
+        self.table_panel.columnconfigure(0, weight=1)
+        # Keep the existing double-click-to-edit behavior. The separate View
+        # button below is strictly read-only.
         self.table.bind("<Double-1>", lambda _event: self.edit_selected())
 
+        self.empty_panel = ttk.Frame(self.results_area, style="Card.TFrame", padding=(28, 42))
+        empty_content = ttk.Frame(self.empty_panel, style="CardInner.TFrame")
+        empty_content.pack(expand=True)
+        self.empty_title = ttk.Label(empty_content, text="", style="SectionTitle.TLabel")
+        self.empty_title.pack(pady=(0, 7))
+        self.empty_message = ttk.Label(empty_content, text="", style="CardLabel.TLabel")
+        self.empty_message.pack(pady=(0, 16))
+        self.empty_action = ttk.Button(empty_content, text="", style="Primary.TButton")
+        self.empty_action.pack()
+        self.empty_panel.pack_forget()
+
         footer = ttk.Frame(self, style="App.TFrame")
-        footer.pack(fill="x", pady=(10, 0))
+        footer.pack(fill="x", pady=(9, 0))
         self.status = ttk.Label(footer, text="", style="Subtitle.TLabel")
         self.status.pack(side="left")
 
-    def refresh(self) -> None:
-        query = self.search_var.get().strip()
-        try:
-            rows = student_service.search_students(query) if query else student_service.list_students()
-            self._load(rows)
-        except Exception:
-            self._database_error()
+    def apply_theme(self, palette: dict[str, str]) -> None:
+        """Update status tags and any currently open read-only detail windows."""
+        self.palette = palette
+        if hasattr(self, "table"):
+            self._configure_status_tags()
+        if hasattr(self, "search_entry"):
+            is_hint = self.search_var.get() == "Search name, student number, or email"
+            self.search_entry.configure(foreground=palette["muted"] if is_hint else palette["text"])
+        for window in [*self.detail_windows, *self.confirmation_windows]:
+            try:
+                if window.winfo_exists():
+                    window.configure(bg=palette["background"])
+            except tk.TclError:
+                self.detail_windows.remove(window)
 
-    def search(self) -> None:
+    def _configure_status_tags(self) -> None:
+        palette = self.palette
+        self.table.tag_configure(
+            "status_active", background=palette["status_active_bg"], foreground=palette["body_text"]
+        )
+        self.table.tag_configure(
+            "status_inactive", background=palette["status_inactive_bg"], foreground=palette["body_text"]
+        )
+        self.table.tag_configure(
+            "status_graduated", background=palette["status_graduated_bg"], foreground=palette["body_text"]
+        )
+
+    def refresh(self) -> None:
+        """Reload the full dataset, then update summary cards and visible rows."""
         try:
-            self._load(student_service.search_students(self.search_var.get().strip()))
+            self.records = list(student_service.list_students())
+            self.records_by_id = {int(row["student_id"]): row for row in self.records}
+            self.load_failed = False
+            self._update_summary_cards()
+            self.apply_filters()
         except Exception:
-            self._database_error()
+            self.load_failed = True
+            self.table_panel.pack_forget()
+            for label in self.summary_labels.values():
+                label.configure(text="—")
+            self._show_empty_state(
+                "Student records unavailable",
+                "Could not load student records. Check the database settings and server.",
+                "Retry",
+                self.refresh,
+            )
+            self.status.configure(text="Student data could not be loaded.")
+
+    def _update_summary_cards(self) -> None:
+        """Count all students, independent of the active search and status filters."""
+        counts = {status.casefold(): 0 for status in STATUSES}
+        for record in self.records:
+            status = str(record.get("status") or "").casefold()
+            if status in counts:
+                counts[status] += 1
+        self.summary_labels["total"].configure(text=f"{len(self.records):,}")
+        for status in STATUSES:
+            self.summary_labels[status.casefold()].configure(text=f"{counts[status.casefold()]:,}")
+
+    def _clear_search_hint(self, _event: tk.Event | None = None) -> None:
+        if self.search_var.get() == "Search name, student number, or email":
+            self.search_var.set("")
+            self.search_entry.configure(foreground=self.palette.get("text", "#252137"))
+
+    def _restore_search_hint(self, _event: tk.Event | None = None) -> None:
+        if not self.search_var.get().strip():
+            self.search_var.set("Search name, student number, or email")
+            self.search_entry.configure(foreground=self.palette.get("muted", "#777187"))
+
+    def _search_text(self) -> str:
+        query = self.search_var.get().strip()
+        if query == "Search name, student number, or email":
+            return ""
+        return query.casefold()
+
+    def apply_filters(self) -> None:
+        if not hasattr(self, "table") or self.load_failed:
+            return
+        query = self._search_text()
+        selected_status = self.status_filter_var.get()
+        selected_status = "" if selected_status == ALL_STATUSES else selected_status.casefold()
+        filtered = []
+        for record in self.records:
+            full_name = f"{record.get('first_name', '')} {record.get('last_name', '')}".strip()
+            searchable = " ".join((
+                str(record.get("student_number") or ""),
+                str(record.get("first_name") or ""),
+                str(record.get("last_name") or ""),
+                full_name,
+                str(record.get("email") or ""),
+            )).casefold()
+            if query and query not in searchable:
+                continue
+            if selected_status and str(record.get("status") or "").casefold() != selected_status:
+                continue
+            filtered.append(record)
+        self.filtered_records = filtered
+        self._render_records()
+
+    def _render_records(self) -> None:
+        self.table.delete(*self.table.get_children())
+        for row in self.filtered_records:
+            status = str(row.get("status") or "")
+            status_key = status.casefold()
+            tags = (f"status_{status_key}",) if status_key in {s.casefold() for s in STATUSES} else ()
+            self.table.insert(
+                "", "end", iid=str(row.get("student_id")), tags=tags,
+                values=(
+                    row.get("student_number") or "",
+                    f"{row.get('first_name', '')} {row.get('last_name', '')}".strip(),
+                    row.get("email") or "",
+                    row.get("department_name") or "",
+                    row.get("program_name") or "",
+                    self._format_admission_date(row.get("admission_date")),
+                    f"●  {status}" if status else "—",
+                ),
+            )
+        count = len(self.filtered_records)
+        self.status.configure(text=f"Showing {count:,} of {len(self.records):,} student(s)")
+        if count:
+            self.empty_panel.pack_forget()
+            self.table_panel.pack(fill="both", expand=True)
+        else:
+            self.table_panel.pack_forget()
+            if not self.records:
+                self._show_empty_state(
+                    "No students yet",
+                    "Register a student to start building your student directory.",
+                    "Add Student",
+                    lambda: self.on_navigate("registration"),
+                )
+            else:
+                self._show_empty_state(
+                    "No matching students",
+                    "Try another search term or status filter.",
+                    "Reset filters",
+                    self.clear_search,
+                )
+
+    def _show_empty_state(
+        self, title: str, message: str, action_text: str, command: Callable[[], None]
+    ) -> None:
+        self.empty_title.configure(text=title)
+        self.empty_message.configure(text=message)
+        self.empty_action.configure(text=action_text, command=command)
+        self.empty_panel.pack(fill="both", expand=True)
 
     def clear_search(self) -> None:
         self.search_var.set("")
-        self.refresh()
-
-    def _load(self, records: list[dict[str, Any]]) -> None:
-        self.records = records
-        self.table.delete(*self.table.get_children())
-        for row in records:
-            name = f"{row.get('first_name', '')} {row.get('last_name', '')}".strip()
-            admission_date = self._format_admission_date(row.get("admission_date"))
-            self.table.insert("", "end", values=(
-                row.get("student_id"),
-                row.get("student_number"),
-                name,
-                row.get("program_name"),
-                row.get("department_name"),
-                admission_date or "",
-                row.get("status"),
-            ))
-        self.status.configure(text=f"{len(records):,} student record(s)")
+        self.status_filter_var.set(ALL_STATUSES)
+        self.apply_filters()
 
     @staticmethod
     def _format_admission_date(value: Any) -> str:
-        """Format an ISO date for the table, leaving missing dates blank."""
         if value is None or value == "":
             return ""
         if isinstance(value, datetime):
             return value.strftime("%d-%m-%Y")
         if isinstance(value, date):
             return value.strftime("%d-%m-%Y")
-
         text = str(value).strip()
         if not text:
             return ""
         try:
-            parsed = date.fromisoformat(text)
+            return date.fromisoformat(text).strftime("%d-%m-%Y")
         except ValueError:
             return text
-        return parsed.strftime("%d-%m-%Y")
 
-    def _database_error(self) -> None:
-        self.status.configure(text="Could not load student records. Check database settings and server.")
-
-    def _selected_id(self) -> int | None:
+    def _selected_record(self) -> dict[str, Any] | None:
         selected = self.table.selection()
         if not selected:
-            messagebox.showinfo("Select a student", "Choose a student record first.", parent=self)
+            self._notify("Choose a student record first.", "warning")
             return None
-        return int(self.table.item(selected[0], "values")[0])
+        return self.records_by_id.get(int(selected[0]))
+
+    def _notify(self, message: str, kind: str) -> None:
+        if self.on_notify is not None:
+            self.on_notify(message, kind)
+
+    def _center_window(self, window: tk.Toplevel) -> None:
+        window.update_idletasks()
+        parent = self.winfo_toplevel()
+        x = parent.winfo_rootx() + (parent.winfo_width() - window.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - window.winfo_height()) // 2
+        window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    def view_selected(self) -> None:
+        """Open the selected student's details in a read-only window."""
+        record = self._selected_record()
+        if record is None:
+            return
+        window = tk.Toplevel(self)
+        window.title("Student details")
+        window.transient(self.winfo_toplevel())
+        window.configure(bg=self.palette["background"])
+        window.minsize(460, 420)
+        window.geometry("560x580")
+        window.resizable(True, True)
+        window.bind("<Escape>", lambda _event: window.destroy())
+        window.bind("<Destroy>", lambda event, w=window: self._forget_detail_window(event, w))
+        self.detail_windows.append(window)
+
+        content = ttk.Frame(window, style="App.TFrame", padding=24)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text="Student details", style="PageTitle.TLabel").pack(anchor="w")
+        full_name = f"{record.get('first_name', '')} {record.get('last_name', '')}".strip()
+        ttk.Label(content, text=full_name, style="Subtitle.TLabel").pack(anchor="w", pady=(4, 18))
+        details = ttk.Frame(content, style="Card.TFrame", padding=18)
+        details.pack(fill="both", expand=True)
+        fields = (
+            ("Student number", record.get("student_number")),
+            ("Email", record.get("email")),
+            ("Phone", record.get("phone")),
+            ("Department", record.get("department_name")),
+            ("Programme", record.get("program_name")),
+            ("Date of birth", self._format_admission_date(record.get("date_of_birth"))),
+            ("Admission date", self._format_admission_date(record.get("admission_date"))),
+            ("Status", record.get("status")),
+            ("Address", record.get("address")),
+        )
+        for index, (label, value) in enumerate(fields):
+            ttk.Label(details, text=label, style="DetailLabel.TLabel").grid(
+                row=index, column=0, sticky="nw", padx=(0, 16), pady=5
+            )
+            ttk.Label(
+                details, text=str(value or "—"), style="DetailValue.TLabel", wraplength=320
+            ).grid(row=index, column=1, sticky="nw", pady=5)
+        details.columnconfigure(1, weight=1)
+        ttk.Button(content, text="Close", style="Secondary.TButton",
+                   command=window.destroy).pack(anchor="e", pady=(14, 0))
+        self._center_window(window)
+
+    def _forget_detail_window(self, event: tk.Event, window: tk.Toplevel) -> None:
+        if str(event.widget) == str(window) and window in self.detail_windows:
+            self.detail_windows.remove(window)
 
     def edit_selected(self) -> None:
-        student_id = self._selected_id()
-        if student_id is not None:
-            self.on_edit(student_id)
+        record = self._selected_record()
+        if record is not None:
+            self.on_edit(int(record["student_id"]))
 
     def manage_selected(self) -> None:
-        student_id = self._selected_id()
-        if student_id is not None:
-            self.on_manage_enrollments(student_id)
+        record = self._selected_record()
+        if record is not None:
+            self.on_manage_enrollments(int(record["student_id"]))
 
     def export_students_csv(self) -> None:
         destination = filedialog.asksaveasfilename(
@@ -191,62 +422,88 @@ class StudentsView(ttk.Frame):
         )
         if not destination:
             return
-
         try:
             records = student_service.list_students()
         except Exception:
-            messagebox.showerror(
-                "Student export failed",
-                "Student records could not be loaded for export.",
-                parent=self,
-            )
+            self._notify("Student records could not be loaded for export.", "error")
             return
-
         if not records:
-            messagebox.showinfo(
-                "No student records",
-                "There are no student records to export.",
-                parent=self,
-            )
+            self._notify("There are no student records to export.", "warning")
             return
-
         try:
             count = export_service.export_students(records, destination)
         except Exception:
-            messagebox.showerror(
-                "Student export failed",
-                "The CSV file could not be written. Check the destination and try again.",
-                parent=self,
-            )
+            self._notify("The CSV file could not be written. Check the destination and try again.", "error")
             return
+        self._notify(f"Exported {count} student record(s).", "success")
 
-        messagebox.showinfo(
-            "Student export complete",
-            f"Exported {count} student record(s).",
-            parent=self,
-        )
+    def _confirm_delete_student(self, record: dict[str, Any]) -> bool:
+        window = tk.Toplevel(self)
+        window.title("Delete student")
+        window.transient(self.winfo_toplevel())
+        window.configure(bg=self.palette["background"])
+        window.resizable(False, False)
+        self.confirmation_windows.append(window)
+        answer = {"confirmed": False}
+
+        content = ttk.Frame(window, style="App.TFrame", padding=22)
+        content.pack(fill="both", expand=True)
+        card = ttk.Frame(content, style="Card.TFrame", padding=20)
+        card.pack(fill="both", expand=True)
+        ttk.Label(card, text="Delete this student?", style="SectionTitle.TLabel").pack(anchor="w")
+        name = f"{record.get('first_name', '')} {record.get('last_name', '')}".strip()
+        number = str(record.get("student_number") or "")
+        ttk.Label(
+            card,
+            text=f"{name}  ·  {number}\nThis action cannot be undone.",
+            style="CardLabel.TLabel",
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(9, 20))
+        actions = ttk.Frame(card, style="CardInner.TFrame")
+        actions.pack(fill="x")
+
+        def confirm() -> None:
+            answer["confirmed"] = True
+            window.destroy()
+
+        cancel_button = ttk.Button(actions, text="Cancel", style="Secondary.TButton", command=window.destroy)
+        cancel_button.pack(side="right", padx=(8, 0))
+        ttk.Button(actions, text="Delete student", style="Danger.TButton", command=confirm).pack(side="right")
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
+        window.bind("<Escape>", lambda _event: window.destroy())
+        window.bind("<Destroy>", lambda event, popup=window: self._forget_confirmation(event, popup))
+        window.grab_set()
+        self._center_window(window)
+        cancel_button.focus_set()
+        self.wait_window(window)
+        return answer["confirmed"]
+
+    def _forget_confirmation(self, event: tk.Event, window: tk.Toplevel) -> None:
+        if str(event.widget) == str(window) and window in self.confirmation_windows:
+            self.confirmation_windows.remove(window)
 
     def delete_selected(self) -> None:
-        student_id = self._selected_id()
-        if student_id is None:
+        record = self._selected_record()
+        if record is None:
             return
-        if not messagebox.askyesno("Delete student", "Delete this student record?", parent=self):
+        student_id = int(record["student_id"])
+        if not self._confirm_delete_student(record):
             return
         try:
             deleted = student_service.remove_student(student_id)
         except ValueError:
-            messagebox.showwarning(
-                "Student cannot be deleted",
-                "This student cannot be deleted because academic enrolment records exist. "
-                "Manage the enrolments explicitly before deleting the student.",
-                parent=self,
+            self._notify(
+                "This student has academic enrolments and cannot be deleted. Manage the enrolments explicitly first.",
+                "warning",
             )
             return
         except Exception:
-            messagebox.showerror(
-                "Delete failed", "The student record could not be deleted.", parent=self
-            )
+            self._notify("The student record could not be deleted.", "error")
             return
         if not deleted:
-            messagebox.showinfo("Student not found", "The student record no longer exists.", parent=self)
+            self._notify("The student record no longer exists.", "warning")
+            self.refresh()
+            return
         self.refresh()
+        self._notify("Student deleted successfully.", "success")
