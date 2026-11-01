@@ -158,9 +158,13 @@ class EnrollmentsView(ttk.Frame):
             height=8,
         )
         course_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.course_list.yview)
-        self.course_list.configure(yscrollcommand=course_scroll.set)
-        self.course_list.pack(side="left", fill="both", expand=True)
-        course_scroll.pack(side="right", fill="y")
+        course_x_scroll = ttk.Scrollbar(list_frame, orient="horizontal", command=self.course_list.xview)
+        self.course_list.configure(yscrollcommand=course_scroll.set, xscrollcommand=course_x_scroll.set)
+        self.course_list.grid(row=0, column=0, sticky="nsew")
+        course_scroll.grid(row=0, column=1, sticky="ns")
+        course_x_scroll.grid(row=1, column=0, sticky="ew")
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
         self.course_list.bind("<<ListboxSelect>>", self._course_selection_changed)
 
         selection_row = ttk.Frame(panel, style="CardInner.TFrame")
@@ -214,7 +218,7 @@ class EnrollmentsView(ttk.Frame):
         title_row = ttk.Frame(panel, style="CardInner.TFrame")
         title_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         ttk.Label(title_row, text="Current enrolments", style="SectionTitle.TLabel").pack(side="left")
-        self.enrollment_count_label = ttk.Label(title_row, text="0 records", style="CardLabel.TLabel")
+        self.enrollment_count_label = ttk.Label(title_row, text="0 records", style="CountBadge.TLabel")
         self.enrollment_count_label.pack(side="right")
 
         columns = (
@@ -235,7 +239,10 @@ class EnrollmentsView(ttk.Frame):
         }
         for column, (label, width) in labels.items():
             self.enrollment_table.heading(column, text=label)
-            self.enrollment_table.column(column, width=width, minwidth=55, anchor="w", stretch=True)
+            anchor = "center" if column in {
+                "course_code", "academic_year", "semester", "grade", "enrollment_status"
+            } else "w"
+            self.enrollment_table.column(column, width=width, minwidth=55, anchor=anchor, stretch=True)
         y_scroll = ttk.Scrollbar(panel, orient="vertical", command=self.enrollment_table.yview)
         x_scroll = ttk.Scrollbar(panel, orient="horizontal", command=self.enrollment_table.xview)
         self.enrollment_table.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
@@ -288,20 +295,20 @@ class EnrollmentsView(ttk.Frame):
         self.course_list.configure(
             background=palette["surface"],
             foreground=palette["body_text"],
-            selectbackground=palette["sidebar_active"],
-            selectforeground=palette["sidebar_text"],
+            selectbackground=palette["selection_bg"],
+            selectforeground=palette["selection_fg"],
             highlightbackground=palette["border"],
             highlightcolor=palette["primary"],
             selectborderwidth=0,
         )
         self.enrollment_table.tag_configure(
-            "enrolled", background=palette["status_active_bg"], foreground=palette["body_text"]
+            "enrolled", background=palette["status_active_bg"], foreground=palette["status_active_fg"]
         )
         self.enrollment_table.tag_configure(
-            "completed", background=palette["status_graduated_bg"], foreground=palette["body_text"]
+            "completed", background=palette["status_graduated_bg"], foreground=palette["status_graduated_fg"]
         )
         self.enrollment_table.tag_configure(
-            "dropped", background=palette["status_inactive_bg"], foreground=palette["body_text"]
+            "dropped", background=palette["status_inactive_bg"], foreground=palette["status_inactive_fg"]
         )
         self._set_feedback_color()
         for window in list(self.confirmation_windows):
@@ -543,7 +550,7 @@ class EnrollmentsView(ttk.Frame):
     def _set_feedback_color(self) -> None:
         if not hasattr(self, "feedback_label") or not self.palette:
             return
-        color_key = {"success": "teal", "error": "danger", "muted": "muted"}.get(
+        color_key = {"success": "teal", "warning": "warning", "error": "danger", "muted": "muted"}.get(
             self.feedback_kind, "muted"
         )
         self.feedback_label.configure(foreground=self.palette[color_key])
@@ -573,7 +580,9 @@ class EnrollmentsView(ttk.Frame):
         button.configure(
             bg=self.palette["surface"] if disabled else self.palette["danger"],
             fg=self.palette["muted"] if disabled else self.palette["danger_text"],
-            activebackground=self.palette["surface"] if disabled else self.palette["danger"],
+            activebackground=(
+                self.palette["surface"] if disabled else self.palette["danger_hover"]
+            ),
             activeforeground=self.palette["muted"] if disabled else self.palette["danger_text"],
             disabledforeground=self.palette["muted"],
         )

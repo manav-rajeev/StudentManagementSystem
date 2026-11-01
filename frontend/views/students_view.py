@@ -9,6 +9,7 @@ from datetime import date, datetime
 from typing import Any
 
 from backend import export_service, student_service
+from frontend.widgets.design_system import bind_hover_tree
 
 
 STATUSES = ("Active", "Inactive", "Graduated")
@@ -63,24 +64,41 @@ class StudentsView(ttk.Frame):
         ).pack(side="left")
 
         self.summary_labels: dict[str, ttk.Label] = {}
+        self.summary_components: dict[str, dict[str, ttk.Widget]] = {}
         summary_row = ttk.Frame(self, style="App.TFrame")
         summary_row.pack(fill="x", pady=(0, 16))
         summaries = (
-            ("total", "Total students", "●", "MetricIcon.TLabel"),
-            ("active", "Active", "●", "StudentActiveIcon.TLabel"),
-            ("inactive", "Inactive", "●", "StudentInactiveIcon.TLabel"),
-            ("graduated", "Graduated", "●", "StudentGraduatedIcon.TLabel"),
+            ("total", "Total students", "ALL", "Violet"),
+            ("active", "Active", "ON", "Teal"),
+            ("inactive", "Inactive", "OFF", "Amber"),
+            ("graduated", "Graduated", "ALUM", "Indigo"),
         )
-        for index, (key, title, icon, icon_style) in enumerate(summaries):
-            card = ttk.Frame(summary_row, style="Card.TFrame", padding=(17, 14))
+        for index, (key, title, icon, accent) in enumerate(summaries):
+            card = ttk.Frame(summary_row, style=f"Metric{accent}.TFrame", padding=(16, 12))
             card.pack(side="left", fill="both", expand=True, padx=(0, 10 if index < 3 else 0))
-            top = ttk.Frame(card, style="CardInner.TFrame")
+            accent_bar = ttk.Frame(card, style=f"Metric{accent}Accent.TFrame", height=3)
+            accent_bar.pack(fill="x", pady=(0, 10))
+            accent_bar.pack_propagate(False)
+            top = ttk.Frame(card, style=f"Metric{accent}Inner.TFrame")
             top.pack(fill="x")
-            ttk.Label(top, text=title, style="CardLabel.TLabel").pack(side="left")
-            ttk.Label(top, text=icon, style=icon_style).pack(side="right")
-            value = ttk.Label(card, text="—", style="CardValue.TLabel")
-            value.pack(anchor="w", pady=(8, 0))
+            title_label = ttk.Label(top, text=title, style=f"Metric{accent}Label.TLabel")
+            title_label.pack(side="left")
+            icon_label = ttk.Label(top, text=icon, style=f"Metric{accent}Icon.TLabel")
+            icon_label.pack(side="right")
+            value = ttk.Label(card, text="—", style=f"Metric{accent}Value.TLabel")
+            value.configure(font=("Segoe UI", 23, "bold"))
+            value.pack(anchor="w", pady=(7, 0))
             self.summary_labels[key] = value
+            self.summary_components[key] = {
+                "card": card, "accent_bar": accent_bar, "top": top,
+                "title": title_label, "icon": icon_label, "value": value,
+            }
+            bind_hover_tree(
+                card,
+                lambda hovered, item=key, color=accent: self._set_summary_hover(
+                    item, color, hovered
+                ),
+            )
 
         toolbar = ttk.Frame(self, style="Card.TFrame", padding=12)
         toolbar.pack(fill="x", pady=(0, 14))
@@ -98,10 +116,10 @@ class StudentsView(ttk.Frame):
         ttk.Label(filter_row, text="Status", style="CardLabel.TLabel").pack(side="left", padx=(4, 7))
         self.status_filter_var = tk.StringVar(value=ALL_STATUSES)
         self.status_filter = ttk.Combobox(
-            toolbar, textvariable=self.status_filter_var, state="readonly",
+            filter_row, textvariable=self.status_filter_var, state="readonly",
             values=(ALL_STATUSES, *STATUSES), width=15,
         )
-        self.status_filter.pack(side="left")
+        self.status_filter.pack(side="left", padx=(0, 8))
         self.status_filter.bind("<<ComboboxSelected>>", lambda _event: self.apply_filters())
         ttk.Button(filter_row, text="Reset filters", style="Secondary.TButton",
                    command=self.clear_search).pack(side="left", padx=(8, 0))
@@ -137,7 +155,8 @@ class StudentsView(ttk.Frame):
         }
         for column, (label, width) in labels.items():
             self.table.heading(column, text=label)
-            self.table.column(column, width=width, minwidth=85, anchor="w", stretch=True)
+            anchor = "center" if column in {"student_number", "admission_date", "status"} else "w"
+            self.table.column(column, width=width, minwidth=85, anchor=anchor, stretch=True)
         y_scroll = ttk.Scrollbar(self.table_panel, orient="vertical", command=self.table.yview)
         x_scroll = ttk.Scrollbar(self.table_panel, orient="horizontal", command=self.table.xview)
         self.table.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
@@ -181,16 +200,30 @@ class StudentsView(ttk.Frame):
             except tk.TclError:
                 self.detail_windows.remove(window)
 
+    def _set_summary_hover(self, key: str, accent: str, hovered: bool) -> None:
+        """Apply card hover styles while keeping all summary values in place."""
+        components = self.summary_components.get(key)
+        if not components:
+            return
+        state = "Hover" if hovered else ""
+        components["card"].configure(style=f"Metric{accent}{state}.TFrame")
+        components["accent_bar"].configure(style=f"Metric{accent}Accent{state}.TFrame")
+        components["top"].configure(style=f"Metric{accent}{state}Inner.TFrame")
+        components["title"].configure(style=f"Metric{accent}{state}Label.TLabel")
+        components["icon"].configure(style=f"Metric{accent}{state}Icon.TLabel")
+        components["value"].configure(style=f"Metric{accent}{state}Value.TLabel")
+        components["value"].configure(font=("Segoe UI", 23, "bold"))
+
     def _configure_status_tags(self) -> None:
         palette = self.palette
         self.table.tag_configure(
-            "status_active", background=palette["status_active_bg"], foreground=palette["body_text"]
+            "status_active", background=palette["status_active_bg"], foreground=palette["status_active_fg"]
         )
         self.table.tag_configure(
-            "status_inactive", background=palette["status_inactive_bg"], foreground=palette["body_text"]
+            "status_inactive", background=palette["status_inactive_bg"], foreground=palette["status_inactive_fg"]
         )
         self.table.tag_configure(
-            "status_graduated", background=palette["status_graduated_bg"], foreground=palette["body_text"]
+            "status_graduated", background=palette["status_graduated_bg"], foreground=palette["status_graduated_fg"]
         )
 
     def refresh(self) -> None:

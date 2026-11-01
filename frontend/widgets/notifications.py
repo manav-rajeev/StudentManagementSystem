@@ -16,18 +16,21 @@ class NotificationCenter(tk.Frame):
     }
 
     def __init__(self, master: tk.Misc, palette: dict[str, Any]) -> None:
-        super().__init__(master, bd=1, relief="solid", padx=14, pady=11)
+        super().__init__(master, bd=1, relief="ridge", padx=13, pady=10)
         self.palette = palette
         self._dismiss_id: str | None = None
         self._kind = "success"
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=1)
+
+        self.accent_bar = tk.Frame(self, width=4)
+        self.accent_bar.grid(row=0, column=0, sticky="ns", padx=(0, 12), pady=1)
 
         self.title_label = tk.Label(self, font=("Segoe UI", 9, "bold"), anchor="w")
-        self.title_label.grid(row=0, column=0, sticky="nw", padx=(0, 10))
+        self.title_label.grid(row=0, column=1, sticky="nw", padx=(0, 10))
         self.message_label = tk.Label(
             self, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=720
         )
-        self.message_label.grid(row=0, column=1, sticky="ew")
+        self.message_label.grid(row=0, column=2, sticky="ew")
         self.close_button = tk.Button(
             self,
             text="×",
@@ -39,7 +42,7 @@ class NotificationCenter(tk.Frame):
             font=("Segoe UI", 13),
             cursor="hand2",
         )
-        self.close_button.grid(row=0, column=2, sticky="ne", padx=(8, 0))
+        self.close_button.grid(row=0, column=3, sticky="ne", padx=(8, 0))
         self.apply_theme(palette)
         self.pack_forget()
 
@@ -77,15 +80,16 @@ class NotificationCenter(tk.Frame):
         background_key, foreground_key, _ = self._STATES[self._kind]
         background = self.palette.get(background_key, self.palette["surface"])
         foreground = self.palette.get(foreground_key, self.palette["body_text"])
-        border = self.palette["border"]
+        border = foreground
         self.configure(bg=background, highlightthickness=1, highlightbackground=border)
+        self.accent_bar.configure(bg=foreground)
         self.title_label.configure(bg=background, fg=foreground)
         self.message_label.configure(bg=background, fg=self.palette["text"])
         self.close_button.configure(
             bg=background,
             fg=self.palette["muted"],
-            activebackground=background,
-            activeforeground=self.palette["text"],
+            activebackground=self.palette["secondary_hover"],
+            activeforeground=self.palette["heading_text"],
         )
 
     def _cancel_dismiss(self) -> None:

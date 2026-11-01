@@ -1,13 +1,14 @@
-"""Theme-aware vertical navigation sidebar."""
+"""Vibrant, theme-aware Campus Manager navigation sidebar."""
 
 from __future__ import annotations
 
 import tkinter as tk
 from collections.abc import Callable
+from typing import Any
 
 
 class NavigationSidebar(tk.Frame):
-    """Campus Manager navigation with active, hover, and theme states."""
+    """Sidebar navigation with distinct selection, hover, and theme states."""
 
     def __init__(
         self,
@@ -15,13 +16,15 @@ class NavigationSidebar(tk.Frame):
         on_navigate: Callable[[str], None],
         on_theme_toggle: Callable[[], None],
         theme: str,
-        palette: dict[str, str],
+        palette: dict[str, Any],
     ) -> None:
         super().__init__(master, width=246)
         self.pack_propagate(False)
         self._on_navigate = on_navigate
         self._on_theme_toggle = on_theme_toggle
         self._buttons: dict[str, tk.Button] = {}
+        self._rows: dict[str, tk.Frame] = {}
+        self._indicators: dict[str, tk.Frame] = {}
         self._active_page = "dashboard"
         self._hover_page: str | None = None
         self.theme = theme
@@ -51,22 +54,31 @@ class NavigationSidebar(tk.Frame):
         self.section_label.pack(fill="x", pady=(0, 5))
 
         destinations = (
-            ("dashboard", "▦", "Dashboard"),
+            ("dashboard", "◆", "Dashboard"),
             ("students", "♙", "Students"),
             ("enrollments", "▤", "Course Enrolments"),
         )
         for page, icon, label in destinations:
+            row = tk.Frame(self)
+            row.pack(fill="x", padx=12, pady=4)
+            indicator = tk.Frame(row, width=4)
+            indicator.pack(side="left", fill="y")
+            indicator.pack_propagate(False)
             button = tk.Button(
-                self,
+                row,
                 text=f"{icon}    {label}",
                 command=lambda key=page: self._on_navigate(key),
-                anchor="w", padx=18, pady=12, bd=0, relief="flat",
-                font=("Segoe UI", 10), cursor="hand2",
+                anchor="w", padx=17, pady=12, bd=0, relief="flat",
+                font=("Segoe UI", 10), cursor="hand2", highlightthickness=0,
             )
-            button.pack(fill="x", padx=12, pady=3)
+            button.pack(side="left", fill="x", expand=True)
             button.bind("<Enter>", lambda _event, key=page: self._on_hover(key))
             button.bind("<Leave>", lambda _event, key=page: self._on_leave(key))
+            indicator.bind("<Enter>", lambda _event, key=page: self._on_hover(key))
+            indicator.bind("<Leave>", lambda _event, key=page: self._on_leave(key))
             self._buttons[page] = button
+            self._rows[page] = row
+            self._indicators[page] = indicator
 
         self.footer = tk.Frame(self)
         self.footer.pack(side="bottom", fill="x", padx=14, pady=(12, 18))
@@ -75,10 +87,12 @@ class NavigationSidebar(tk.Frame):
         self.theme_button = tk.Button(
             self.footer, command=self._toggle_theme, anchor="w", padx=12, pady=10,
             bd=0, relief="flat", font=("Segoe UI", 9, "bold"), cursor="hand2",
+            highlightthickness=1,
         )
         self.theme_button.pack(fill="x")
         self.theme_button.bind("<Enter>", lambda _event: self.theme_button.configure(
-            bg=self.palette["sidebar_hover"]
+            bg=self.palette["sidebar_toggle_hover"],
+            highlightbackground=self.palette["primary"],
         ))
         self.theme_button.bind("<Leave>", lambda _event: self._style_theme_button())
         self.footer_label = tk.Label(
@@ -89,13 +103,18 @@ class NavigationSidebar(tk.Frame):
         self.apply_theme(self.theme, self.palette)
 
     def apply_theme(self, theme: str, palette: dict[str, Any]) -> None:
-        """Apply the application-owned theme palette to the sidebar widgets."""
+        """Recolor every native sidebar widget from the central palette."""
         self.theme = theme
         self.palette = palette
         self.configure(bg=palette["sidebar"])
         for widget in (self.brand, self.brand_title.master, self.footer):
             widget.configure(bg=palette["sidebar"])
-        self.brand_badge.configure(bg=palette["primary"], fg=palette["primary_text"])
+        for row in self._rows.values():
+            row.configure(bg=palette["sidebar"])
+        self.brand_badge.configure(
+            bg=palette["primary"], fg=palette["primary_text"],
+            highlightthickness=1, highlightbackground=palette["primary_hover"],
+        )
         self.brand_title.configure(bg=palette["sidebar"], fg=palette["sidebar_text"])
         self.brand_subtitle.configure(bg=palette["sidebar"], fg=palette["sidebar_muted"])
         self.section_label.configure(bg=palette["sidebar"], fg=palette["sidebar_muted"])
@@ -105,7 +124,7 @@ class NavigationSidebar(tk.Frame):
         self._style_theme_button()
 
     def set_active(self, page: str) -> None:
-        """Keep the existing navigation API and registration highlight behavior."""
+        """Keep the application navigation API and registration highlight behavior."""
         if page == "registration":
             page = "students"
         self._active_page = page
@@ -119,22 +138,44 @@ class NavigationSidebar(tk.Frame):
         background = self.palette["sidebar_active"] if active else (
             self.palette["sidebar_hover"] if hovered else self.palette["sidebar"]
         )
+        self._rows[page].configure(bg=background)
         button.configure(
             bg=background,
             fg=self.palette["sidebar_text"],
-            activebackground=self.palette["sidebar_active"] if active else self.palette["sidebar_hover"],
+            activebackground=(
+                self.palette["sidebar_active_hover"] if active else self.palette["sidebar_hover"]
+            ),
             activeforeground=self.palette["sidebar_text"],
             font=("Segoe UI", 10, "bold" if active else "normal"),
         )
+        indicator_color = (
+            self.palette["primary_hover"] if active and hovered else
+            self.palette["primary"] if active else
+            self.palette["lavender"] if hovered else self.palette["sidebar"]
+        )
+        self._indicators[page].configure(bg=indicator_color)
 
     def _on_hover(self, page: str) -> None:
         self._hover_page = page
         self._style_navigation_button(page)
 
     def _on_leave(self, page: str) -> None:
-        if self._hover_page == page:
-            self._hover_page = None
-        self._style_navigation_button(page)
+        row = self._rows[page]
+
+        def clear_if_outside() -> None:
+            try:
+                x, y = row.winfo_pointerxy()
+                inside = (
+                    row.winfo_rootx() <= x < row.winfo_rootx() + row.winfo_width()
+                    and row.winfo_rooty() <= y < row.winfo_rooty() + row.winfo_height()
+                )
+            except tk.TclError:
+                inside = False
+            if not inside and self._hover_page == page:
+                self._hover_page = None
+                self._style_navigation_button(page)
+
+        self.after_idle(clear_if_outside)
 
     def _toggle_theme(self) -> None:
         self._on_theme_toggle()
@@ -144,7 +185,9 @@ class NavigationSidebar(tk.Frame):
         symbol = "☼" if mode == "light" else "◐"
         self.theme_button.configure(
             text=f"{symbol}   Switch to {mode} theme",
-            bg=self.palette["sidebar"], fg=self.palette["sidebar_text"],
-            activebackground=self.palette["sidebar_hover"],
+            bg=self.palette["sidebar_toggle"], fg=self.palette["sidebar_text"],
+            highlightbackground=self.palette["sidebar_hover"],
+            highlightcolor=self.palette["primary_hover"],
+            activebackground=self.palette["sidebar_toggle_hover"],
             activeforeground=self.palette["sidebar_text"],
         )

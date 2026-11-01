@@ -17,3 +17,7 @@ Thumbs.db
 
 # Generated exports
 exports/
+
+# Codex visual review screenshots
+/screenshots/visual-review/
+/screenshots/visual-refinement/

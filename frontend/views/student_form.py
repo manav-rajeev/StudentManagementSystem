@@ -44,14 +44,14 @@ class StudentFormView(ttk.Frame):
         self.page_title.pack(anchor="w")
         ttk.Label(
             self,
-            text="Enter the student's details and select their department and programme.",
+            text="Complete each section below. Scroll to reach all fields; save and cancel remain available.",
             style="Subtitle.TLabel",
         ).pack(anchor="w", pady=(5, 18))
 
         self.form_viewport = ScrollableFrame(self)
         self.form_viewport.pack(fill="both", expand=True)
-        panel = ttk.Frame(self.form_viewport.content, style="Card.TFrame", padding=(22, 16))
-        panel.pack(fill="both", expand=True)
+        panel = ttk.Frame(self.form_viewport.content, style="Card.TFrame", padding=(24, 18))
+        panel.pack(fill="both", expand=True, padx=(0, 10), pady=(0, 12))
         panel.columnconfigure(0, weight=1)
         panel.columnconfigure(1, weight=1)
         self._section(panel, "Personal details", 0)
@@ -81,16 +81,18 @@ class StudentFormView(ttk.Frame):
             values=("Active", "Inactive", "Graduated"),
         )
 
-        self.status_message = ttk.Label(
-            panel, text="", style="FormStatus.TLabel"
-        )
-        self.status_message.grid(row=20, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        actions = ttk.Frame(panel, style="CardInner.TFrame")
-        actions.grid(row=21, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        # Keep primary actions visible while the longer form scrolls.
+        self.form_footer = ttk.Frame(self, style="Card.TFrame", padding=(16, 10))
+        self.form_footer.pack(fill="x", pady=(8, 0))
+        self.status_message = ttk.Label(self.form_footer, text="", style="FormStatus.TLabel")
+        self.status_message.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        actions = ttk.Frame(self.form_footer, style="CardInner.TFrame")
+        actions.pack(side="right")
         self.save_button = ttk.Button(actions, text="Add student", style="Primary.TButton", command=self.save)
         self.save_button.pack(side="left")
         ttk.Button(actions, text="Cancel", style="Secondary.TButton",
                    command=lambda: self.on_navigate("students")).pack(side="left", padx=(9, 0))
+        self.form_viewport.bind_mousewheel_tree(panel)
 
     def apply_theme(self, palette: dict[str, str]) -> None:
         """Apply the app's active palette to native text and status widgets."""
@@ -110,10 +112,10 @@ class StudentFormView(ttk.Frame):
             )
 
     def _section(self, parent: ttk.Frame, title: str, row: int) -> None:
-        ttk.Label(parent, text=title, style="SectionTitle.TLabel").grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=(12, 3)
-        )
-        ttk.Separator(parent).grid(row=row + 1, column=0, columnspan=2, sticky="ew", pady=(0, 3))
+        section = ttk.Frame(parent, style="FormSection.TFrame")
+        section.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(12, 3))
+        ttk.Frame(section, style="FormSectionAccent.TFrame", width=4).pack(side="left", fill="y")
+        ttk.Label(section, text=title, style="FormSectionTitle.TLabel").pack(side="left", fill="x")
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         self.status_is_error = error
@@ -163,6 +165,7 @@ class StudentFormView(ttk.Frame):
         self.pending_student_id = student_id
 
     def refresh(self) -> None:
+        self.form_viewport.canvas.yview_moveto(0)
         try:
             self.departments = lookup_service.list_departments()
             self.department_ids = {
